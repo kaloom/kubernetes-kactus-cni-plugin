@@ -1,0 +1,71 @@
+/*
+Copyright 2019 Kaloom Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+plugins {
+  id 'com.github.blindpirate.gogradle' version '0.10.2'
+}
+
+dependencies {
+  golang {
+    build name:'github.com/kaloom/kubernetes-common', commit:'LATEST_COMMIT'
+
+    build (name:'google.golang.org/grpc', commit:'1cd234627e6f392ade0527d593eb3fe53e832d4a') {
+      exclude name:'go.opencensus.io'
+    }
+    build name:'github.com/golang/protobuf', commit:'1e59b77b52bf8e4b449a57e6f79f21226d571845'
+    build name:'golang.org/x/net', commit:'bb807669a61aca6092d8137da1fab2150bb96ad7'
+    build name:'google.golang.org/genproto', commit:'a8101f21cf983e773d0c1133ebc5424792003214'
+
+    build name:'github.com/containernetworking/cni', commit:'a2da8f8d7fd8e6dc25f336408a8ac86f050fbd88'
+    build name:'github.com/coreos/go-iptables/iptables', commit:'259c8e6a4275d497442c721fa52204d7a58bde8b'
+    build name:'github.com/coreos/go-systemd/activation', commit:'2688e91251d9d8e404e86dd8f096e23b2f086958'
+    build name:'github.com/vishvananda/netns', commit:'54f0e4339ce73702a0607f49922aaa1e749b418d'
+    build name:'github.com/vishvananda/netlink', commit:'6e453822d85ef5721799774b654d4d02fed62afb'
+    build name:'golang.org/x/sys', commit:'cd2c276457edda6df7fb04895d3fd6a6add42926'
+    build name:'github.com/j-keck/arping', commmit:'2cf9dc699c5640a7e2c81403a44127bf28033600'
+    build name:'github.com/d2g/dhcp4client', commit:'bed07e1bc5b85f69c6f0fd73393aa35ec68ed892'
+    build name:'github.com/d2g/dhcp4', commit:'f0e4d29ff0231dce36e250b2ed9ff08412584bca'
+    build name:'github.com/mattn/go-shellwords', commit:'02e3cf038dcea8290e44424da473dd12be796a8a'
+    build name:'github.com/alexflint/go-filemutex', commit:'d358565f3c3f5334209f1e80693e4f621650c489'
+
+    build name:'k8s.io/apimachinery', commit:'b317fa7ec8e0e7d1f77ac63bf8c3ec7b29a2a215'
+    build name:'k8s.io/client-go', commit:'4a3ab2f5be5177366f8206fd79ce55ca80e417fa'
+  }
+}
+
+golang {
+  goVersion = "${project.goVersion}"
+  packagePath = "${project.packageRepo}"
+}
+
+defaultTasks 'build'
+
+def gitCommit = "git rev-parse --verify --short HEAD".execute().text.trim()
+def gitBranch = "git describe --tags --abbrev=0".execute().text.trim() ? "" : "master"
+def buildDate = new Date().format("yyyy-MM-dd_HH:mm:ss.sss_Z", TimeZone.getTimeZone("UTC"))
+def ldflags = "-ldflags \"-X main.branch=${gitBranch} -X main.commit=${gitCommit} -X main.date=${buildDate}\""
+
+build {
+  go "build ${ldflags} -o ${project.binDir}/${project.execName} ${project.packageRepo}/${project.execName}"
+}
+
+clean {
+  doLast {
+    [ ".gogradle", ".gradle" ].each {
+      delete "${it}"
+    }
+  }
+}
