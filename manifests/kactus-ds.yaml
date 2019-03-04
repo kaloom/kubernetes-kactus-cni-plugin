@@ -4,7 +4,7 @@ metadata:
   name: kactus-cfg
   namespace: kube-system
 data:
-  10-kactus.conf: |
+  05-kactus.conf: |
     {
       "name": "kactus-cni-plugin",
       "cniVersion": "0.3.1",
@@ -48,10 +48,10 @@ spec:
         image: kaloom/kactus:0.1.0
         command:
         - sh
-        args: [ "-c", "install -d 755 /host/opt/kaloom/cni/bin; cp /kactus /host/opt/kaloom/cni/bin; cp /etc/cni/net.d/10-kactus.conf /host/etc/cni/net.d" ]
+        args: [ "-ec", "cp /kactus /host/opt/cni/bin; cp /etc/cni/net.d/05-kactus.conf /host/etc/cni/net.d" ]
         volumeMounts:
-        - name: hostopt
-          mountPath: /host/opt
+        - name: hostcnibin
+          mountPath: /host/opt/cni/bin
         - name: hostcninet
           mountPath: /host/etc/cni/net.d
         - name: cninet
@@ -59,11 +59,12 @@ spec:
       containers:
       - name: kactus
         image: kaloom/kactus:0.1.0
-        args: ["/bin/bash", "-c", "sleep infinity" ]
+        args: ["/bin/bash", "-c", "echo 'kactus cni-plugin got installed'; sleep infinity" ]
       volumes:
-      - name: hostopt
+      - name: hostcnibin
         hostPath:
-          path: /opt
+          path: /opt/cni/bin
+          type: DirectoryOrCreate
       - name: hostcninet
         hostPath:
           path: /etc/cni/net.d
