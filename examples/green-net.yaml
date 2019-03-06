@@ -1,0 +1,17 @@
+apiVersion: "kaloom.com/v1"
+kind: Network
+metadata:
+  name: green
+spec:
+  plugin: vlan
+  config: '
+  {
+       "cniVersion": "0.3.1",
+       "name": "green-net",
+       "type": "vlan",
+       "vlanId": 42,
+       "master": "eth0",
+       "ipam": {
+         "type": "null"
+      }  
+}'

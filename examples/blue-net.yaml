@@ -1,0 +1,17 @@
+apiVersion: "kaloom.com/v1"
+kind: Network
+metadata:
+  name: blue
+spec:
+  plugin: vlan
+  config: '
+  {
+       "cniVersion": "0.3.1",
+       "name": "blue-net",
+       "type": "vlan",
+       "vlanId": 43,
+       "master": "eth0",
+       "ipam": {
+         "type": "null"
+      }  
+}'
