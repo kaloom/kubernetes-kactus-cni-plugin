@@ -21,7 +21,7 @@ We use a function that given a network attachment name (key) would return the de
 
 ### How the podagent communicate the addition/deletion of a network attachement into a running Pod
 
-When the podagent detects that there is addition/deletion of a network attachement in a Pod’s annotation, it would invoke the master plugin (e.g. kactus) with augmented CNI_ARGS (K8S_POD_NETWORK=<network-attachment-name>) that includes the network attachment name to be added/deleted, kactus than use the hash function to map a network to a device in the Pod
+When the podagent detects that there is addition/deletion of a network attachement in a Pod’s annotation, it would invoke the system cni-plugin (e.g. kactus) with augmented CNI_ARGS (K8S_POD_NETWORK=<network-attachment-name>) that includes the network attachment name to be added/deleted, kactus than uses a hash function to map a network attachment to a device in the Pod
 
 ### Additional attributes for the network attachment config annotations in Pods
 
@@ -126,7 +126,9 @@ Currently, to deploy kactus as DaemonSet
 
 # Example
 
-As pre-requiste make sure that you have setup your Kubernetes cluster with kactus cni-plugin, see the Setup section for details.
+As pre-requiste:
+1. make sure that you have setup your Kubernetes cluster with kactus cni-plugin, see the Setup section for details.
+2. install the `null` ipam cni-plugin see [setup null cni-plugin](https://github.com/kaloom/kubernetes-null-cni-plugin/blob/master/README.md)
 
 For the sake of simplicity, the networking technologies we're going to use in order to isolate the L2 networks is vlan (i.e. IEEE 802.1Q) where the master network device on the host is `eth0` (if the network device on the host is not `eth0` you need to update `examples/green-net.yaml` and `examples/blue-net.yaml`)
 
