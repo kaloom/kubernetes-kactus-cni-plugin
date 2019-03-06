@@ -128,7 +128,7 @@ Currently, to deploy kactus as DaemonSet
 
 As pre-requiste make sure that you have setup your Kubernetes cluster with kactus cni-plugin, see the Setup section for details.
 
-For the sake of simplicity, the networking technologies we're going to isolate L2 networks is vlan where the master network device on the host is `eth0` (if the network device on the host is not `eth0` need to update `examples/green-net.yaml` and `examples/blue-net.yaml`)
+For the sake of simplicity, the networking technologies we're going to use in order to isolate the L2 networks is vlan (i.e. IEEE 802.1Q) where the master network device on the host is `eth0` (if the network device on the host is not `eth0` you need to update `examples/green-net.yaml` and `examples/blue-net.yaml`)
 
 ## create 2 Pod each of which is attached to 2 networks `green` and `blue`, these would be available at Pod startup
 
@@ -144,7 +144,7 @@ provision the `blue` network attachment from the `examples/blue-net.yaml` spec. 
 
 The app1 kubernetes Deployement spec file in `examples/app1.yaml` contains one container with one Pod instance, the container image for this example is Linux alpine.
 
-The annotation in the spec. file defines that we want to start the Pod with 2 addition network devices attached to it, the `green` and `blue`:
+The annotation in the spec. file defines that we want to start the Pod with 2 additional network devices attached to the `green` and `blue`:
 
 ```
 networks: '[ { "name": "green" }, { "name": "blue" } ]'
@@ -189,12 +189,20 @@ if we check the app1 Pod, we should see in addition to `lo` and `eth0`, two netw
        valid_lft forever preferred_lft forever
 ```
 
-Note: the network device attached to the green network can be found:
+Note: the network device attached to the `green` network attachment can be found:
 
 > $ `(echo -n net; echo -n green | md5sum - | cut -b1-12)`
 
 ```
 net9f27410725ab
+```
+
+and for the device attached to the `blue` network attachment:
+
+> $ `(echo -n net; echo -n blue | md5sum - | cut -b1-12)`
+
+```
+net48d6215903df
 ```
 
 ### create the app2 deployment
