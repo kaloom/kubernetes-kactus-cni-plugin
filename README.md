@@ -6,22 +6,22 @@ Kactus is Kaloom's multi network cni-plugin, it's a meta plugin that delegate th
 
 When kactus is configured as the system cni-plugin (i.e. the first config in lexical order under `/etc/cni/net.d/`), it can be invoked (via the [podagent](https://github.com/kaloom/kubernetes-podagent)) after a Pod/Deployement/DaemonSet/StatefulSet get deployed in order to add/delete network devices in a running Pod without restarting the latter.
 
-In order to do that, kactus uses Pod's network attachment annotations to associate a network name to a network device in a Pod. A network attachment related configurations is a resource in Kubernetes (a CustomResourceDefinition) that kactus can fetch by calling kubernetes' apiserver.
+In order to do that, kactus uses Pod's network attachment annotations to associate a network attachment name to a network device in a Pod. A network attachment related configurations is a resource in Kubernetes (a CustomResourceDefinition) that kactus can fetch by calling kubernetes' apiserver.
 
 ## Consistent network devices naming
 
-The first network device in a Pod (i.e. the one attached to the default network) is called `eth0`, auxiliary network devices (i.e. the ones not attached to the default network) would uses a consistent network device name based on the name of the network attachment name.
+The first network device in a Pod (i.e. the one attached to the default network) is called `eth0`, auxiliary network devices (i.e. the ones not attached to the default network) would uses a consistent network device name based on the name of the network attachment.
 
 ### Why this is needed:
 
-* To support multiple network devices attached to networks where these devices can be created/deleted at runtime, network device ordering would not works (e.g. `eth`\<X\> or `net-`\<X\> multus’s way)
+* To support multiple network devices attached to networks where these devices can be created/deleted dynamically, network device ordering would not works (e.g. `eth`\<X\> or `net-`\<X\> multus’s way)
 * To provide a 1-to-1 mapping between network attachment and a device so that different users (agents and application) have a way to map a network attachment to a device
 
 We use a function that given a network attachment name (key) would return the device name associated with it in a Pod. Currently the function we use would prefix a device name with “net” and add to it the first 13 characters of the md5 digest of the network attachment name; given that the max. size of a device name in linux is 15 characters. There is a small chance of collision but it’s probability minimal
 
-### How the podagent communicate the addition/deletion of a network attachement into a running Pod
+### How the podagent communicate the addition/deletion of a network attachment into a running Pod
 
-When the podagent detects that there is addition/deletion of a network attachement in a Pod’s annotation, it would invoke the system cni-plugin (e.g. kactus) with augmented CNI_ARGS (K8S_POD_NETWORK=<network-attachment-name>) that includes the network attachment name to be added/deleted, kactus than uses a hash function to map a network attachment to a device in the Pod
+When the podagent detects that there is addition/deletion of a network attachment in a Pod’s annotation, it would invoke the system cni-plugin (e.g. kactus) with augmented CNI_ARGS (K8S_POD_NETWORK=<network-attachment-name>) that includes the network attachment name to be added/deleted, kactus than uses a hash function to map a network attachment to a device in the Pod
 
 ### Additional attributes for the network attachment config annotations in Pods
 
@@ -246,7 +246,7 @@ if we check the app2 Pod, we should see in addition to `lo` and `eth0`, two netw
        valid_lft forever preferred_lft forever
 ```
 
-### test connectivity over `green` and `blue` network attachements
+### test connectivity over `green` and `blue` network attachments
 
 We should be able now to `ping 192.168.42.20` from app1
 
