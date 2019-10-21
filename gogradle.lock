@@ -317,7 +317,7 @@ dependencies:
     - "git@github.com:kaloom/kubernetes-common.git"
     vcs: "git"
     name: "github.com/kaloom/kubernetes-common"
-    commit: "53ca04fed9be3d58433ddae04b77eeb8384fdebb"
+    commit: "2ba124d53bcdf3936f2a18fdcf2e9639abc5035a"
     transitive: false
   - name: "github.com/mailru/easyjson"
     host:

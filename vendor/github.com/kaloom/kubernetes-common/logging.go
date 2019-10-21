@@ -23,8 +23,9 @@ import (
 )
 
 const (
-	loggingLevelEnvironmentVar = "_CNI_LOGGING_LEVEL"
-	loggingFileEnvironmentVar  = "_CNI_LOGGING_FILE"
+	loggingLevelEnvironmentVar  = "_CNI_LOGGING_LEVEL"
+	loggingFileEnvironmentVar   = "_CNI_LOGGING_FILE"
+	loggingPrefixEnvironmentVar = "_CNI_LOGGING_PREFIX"
 
 	// LoggingLevelNone for no logging
 	LoggingLevelNone loggingLevelType = iota
@@ -39,9 +40,17 @@ const (
 var (
 	loggingEnabled bool
 	loggingLevel   loggingLevelType
+	loggingPrefix  string
 )
 
 type loggingLevelType int
+
+// LoggingParams define logging parameters,
+// File for the log filename and Prefix for log entries prefix
+type LoggingParams struct {
+	File   string
+	Prefix string
+}
 
 // IsLoggingEnabled return true if loggingLevelEnvironmentVar is set
 func IsLoggingEnabled() bool {
@@ -56,10 +65,22 @@ func IsLoggingEnabled() bool {
 	return false
 }
 
-// GetLoggingFile return the environment variable value of the loggingFileEnvironmentVar
-func GetLoggingFile() string {
+func getLoggingFile(params *LoggingParams) string {
 	if val, present := os.LookupEnv(loggingFileEnvironmentVar); present {
 		return val
+	}
+	if params != nil {
+		return params.File
+	}
+	return ""
+}
+
+func getLoggingPrefix(params *LoggingParams) string {
+	if val, present := os.LookupEnv(loggingPrefixEnvironmentVar); present {
+		return val
+	}
+	if params != nil {
+		return params.Prefix
 	}
 	return ""
 }
@@ -84,31 +105,37 @@ func getLoggingLevel(l int) loggingLevelType {
 // LogInfo info level logging function
 func LogInfo(format string, args ...interface{}) {
 	if loggingLevel >= LoggingLevelInfo {
-		log.Printf("[INFO] "+format, args...)
+		log.Printf("[INFO] "+loggingPrefix+format, args...)
 	}
 }
 
 // LogError error level logging function
 func LogError(format string, args ...interface{}) {
 	if loggingLevel >= LoggingLevelError {
-		log.Printf("[ERR] "+format, args...)
+		log.Printf("[ERR] "+loggingPrefix+format, args...)
 	}
 }
 
 // LogDebug debug level logging function
 func LogDebug(format string, args ...interface{}) {
 	if loggingLevel >= LoggingLevelDebug {
-		log.Printf("[DEBUG] "+format, args...)
+		log.Printf("[DEBUG] "+loggingPrefix+format, args...)
 	}
 }
 
 // OpenLogFile initializes logging
-// - if loggingLevelEnvironmentVar is not defined or not enabled the log functions would be a nop
-// - if loggingFileEnvironmentVar is not defined or empty log to stderr
-func OpenLogFile() *os.File {
+//
+// - if loggingLevelEnvironmentVar is not defined or not enabled the
+//   log functions would be a nop
+// - the optioanl params specifies the log file to use and log entries
+//   prefix, these can be overwritten via loggingFileEnvironmentVar and
+//   loggingPrefixEnvironmentVar env. variables respectively.
+//   Note: if a log file has not been specified, logs will be redirected to stderr
+func OpenLogFile(params *LoggingParams) *os.File {
 	loggingEnabled = IsLoggingEnabled()
 	if loggingEnabled {
-		logFile := GetLoggingFile()
+		loggingPrefix = getLoggingPrefix(params)
+		logFile := getLoggingFile(params)
 		if logFile == "" {
 			return os.Stderr
 		}

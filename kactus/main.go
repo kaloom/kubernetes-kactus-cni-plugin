@@ -681,7 +681,7 @@ func cmdDel(args *skel.CmdArgs) error {
 func main() {
 	// will get a file object if _CNI_LOGGING_LEVEL environment variable is
 	// set to a value >= 1, otherwise logging goes to /dev/null
-	lf := kc.OpenLogFile()
+	lf := kc.OpenLogFile(nil)
 	defer kc.CloseLogFile(lf)
 
 	skel.PluginMain(cmdAdd, cmdDel, version.All)
