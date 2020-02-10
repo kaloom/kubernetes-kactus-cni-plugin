@@ -59,6 +59,7 @@ def buildDate = new Date().format("yyyy-MM-dd_HH:mm:ss.sss_Z", TimeZone.getTimeZ
 def ldflags = "-ldflags \"-X main.branch=${gitBranch} -X main.commit=${gitCommit} -X main.date=${buildDate}\""
 
 build {
+  environment GO111MODULE: 'off'
   go "build ${ldflags} -o ${project.binDir}/${project.execName} ${project.packageRepo}/${project.execName}"
 }
 

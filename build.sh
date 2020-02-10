@@ -36,6 +36,7 @@ fi
 export GO15VENDOREXPERIMENT=1
 export GOBIN=${PWD}/bin
 export GOPATH=${PWD}/${GOGRADLE_PROJECT_PATH}
+export GO111MODULE=off
 
 echo "Building $exec_name"
 go install -ldflags "${LDFLAGS}" "$@" ${repo_path}/${exec_name}
