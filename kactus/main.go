@@ -297,7 +297,7 @@ func clearPlugins(lastOkIdx int, idx int, argIfName string, delegates []map[stri
 		return
 	}
 
-	kc.LogDebug("clearPlugins: lastOkIdx=%d, idx=%d, argIfName=%s, networks=%v\n", lastOkIdx, idx, argIfName)
+	kc.LogDebug("clearPlugins: lastOkIdx=%d, idx=%d, argIfName=%s\n", lastOkIdx, idx, argIfName)
 	for i := lastOkIdx + 1; i <= idx; i++ {
 		delegateDel(argIfName, delegates[i])
 	}
@@ -506,7 +506,7 @@ func validatePodNetworksConfig(networks []kc.NetworkConfig) (bool, error) {
 
 func getIfName(argsIfName string, delegate map[string]interface{}) string {
 	var ifName string
-	if isMasterplugin(delegate) {
+	if isMasterplugin(delegate) || !isString(delegate["networkName"]) {
 		ifName = argsIfName
 	} else {
 		ifName = kc.GetNetworkIfname(delegate["networkName"].(string))
