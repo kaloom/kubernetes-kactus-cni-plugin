@@ -223,22 +223,23 @@ func checkDelegate(netconf map[string]interface{}, masterpluginEnabled *bool) er
 	return nil
 }
 
-func delegateAdd(network kc.NetworkConfig, argif string, netconf map[string]interface{}, auxNetOnly bool) (bool, error) {
+func delegateAdd(network kc.NetworkConfig, argif string, netconf map[string]interface{}, auxNetOnly bool) (error, types.Result) {
 	kc.LogDebug("delegateAdd: network '%v', argif '%s', netconf '%+v'\n", network, argif, netconf)
 	netconfBytes, err := json.Marshal(netconf)
 	if err != nil {
-		return true, fmt.Errorf("Kactus: error serializing kactus delegate netconf: %v", err)
+		return fmt.Errorf("Kactus: error serializing kactus delegate netconf: %v", err), nil
 	}
 
 	if !isMasterplugin(netconf) {
 		podif := kc.GetNetworkIfname(network.NetworkName)
+
 		if os.Setenv("CNI_IFNAME", podif) != nil {
-			return true, fmt.Errorf("Kactus: error in setting CNI_IFNAME")
+			return fmt.Errorf("Kactus: error in setting CNI_IFNAME"), nil
 		}
 		if network.IfMAC != "" {
 			cniArgs := fmt.Sprintf("IgnoreUnknown=1;CNI_IFMAC=%s", network.IfMAC)
 			if os.Setenv("CNI_ARGS", cniArgs); err != nil {
-				return true, fmt.Errorf("Kactus: error in setting CNI_ARGS to %s", cniArgs)
+				return fmt.Errorf("Kactus: error in setting CNI_ARGS to %s", cniArgs), nil
 			}
 			kc.LogDebug("delegateAdd: will invoke.DelegateAdd with a CNI_IFNAME set to: %s and CNI_ARGS set to: '%s' (not a master plugin)\n", podif, cniArgs)
 		} else {
@@ -246,7 +247,7 @@ func delegateAdd(network kc.NetworkConfig, argif string, netconf map[string]inte
 		}
 	} else {
 		if os.Setenv("CNI_IFNAME", argif) != nil {
-			return true, fmt.Errorf("Kactus: error in setting CNI_IFNAME")
+			return fmt.Errorf("Kactus: error in setting CNI_IFNAME"), nil
 		}
 		kc.LogDebug("delegateAdd: will invoke.DelegateAdd with a CNI_IFNAME set to: %s (for master plugin)\n", argif)
 	}
@@ -256,17 +257,10 @@ func delegateAdd(network kc.NetworkConfig, argif string, netconf map[string]inte
 	result, err := invoke.DelegateAdd(delegatePluginType, netconfBytes)
 	if err != nil {
 		kc.LogError("delegateAdd: invoke.DelegateAdd errored: %s: %v\n", delegatePluginType, err)
-		return true, fmt.Errorf("Kactus: error in invoke Delegate add - %q: %v", delegatePluginType, err)
+		return fmt.Errorf("Kactus: error in invoke Delegate add - %q: %v", delegatePluginType, err), nil
 	}
 
-	if !isMasterplugin(netconf) {
-		if auxNetOnly {
-			return true, result.Print()
-		}
-		return true, nil
-	}
-
-	return false, result.Print()
+	return nil, result
 }
 
 func delegateDel(argIfName string, netconf map[string]interface{}) error {
@@ -291,14 +285,14 @@ func delegateDel(argIfName string, netconf map[string]interface{}) error {
 	return err
 }
 
-func clearPlugins(lastOkIdx int, idx int, argIfName string, delegates []map[string]interface{}) {
+func clearPlugins(idx int, argIfName string, delegates []map[string]interface{}) {
 	if os.Setenv("CNI_COMMAND", "DEL") != nil {
 		kc.LogError("failed to set CNI_COMMAND to DEL")
 		return
 	}
 
-	kc.LogDebug("clearPlugins: lastOkIdx=%d, idx=%d, argIfName=%s\n", lastOkIdx, idx, argIfName)
-	for i := lastOkIdx + 1; i <= idx; i++ {
+	kc.LogDebug("clearPlugins: idx=%d, argIfName=%s\n", idx, argIfName)
+	for i := 0; i <= idx; i++ {
 		delegateDel(argIfName, delegates[i])
 	}
 }
@@ -568,38 +562,35 @@ func cmdAdd(args *skel.CmdArgs) error {
 		}
 	}
 
-	currentDelegates, err := saveDelegates(args.ContainerID, nc.CNIDir, true, nc.Delegates)
+	var result types.Result
+	idx := -1
+	for i, delegate := range nc.Delegates {
+		idx = i
+		if nc.CNIVersion != "" {
+			delegate["cniVersion"] = nc.CNIVersion
+		}
+		err, result = delegateAdd(networks[i], args.IfName, delegate, auxNetOnly)
+		if err != nil {
+			kc.LogError("cmdAdd: %v\n", err)
+			break
+		}
+	}
+
+	if err != nil {
+		clearPlugins(idx, args.IfName, nc.Delegates)
+		return err
+	}
+
+	_, err = saveDelegates(args.ContainerID, nc.CNIDir, true, nc.Delegates)
 	if err != nil {
 		err = fmt.Errorf("Kactus: Err in saving the delegates: %v", err)
 		kc.LogError("cmdAdd: %v\n", err)
 		return err
 	}
 
-	var lastErr error
-	lastOkIdx, idx := -1, -1
-	for i, delegate := range nc.Delegates {
-		idx = i
-		if nc.CNIVersion != "" {
-			delegate["cniVersion"] = nc.CNIVersion
-		}
-		errored, err := delegateAdd(networks[i], args.IfName, delegate, auxNetOnly)
-		if !errored {
-			lastOkIdx = i
-		} else if errored && err != nil {
-			lastErr = err
-			kc.LogError("cmdAdd: %v\n", err)
-			break
-		}
-	}
-
-	if lastErr != nil {
-		clearPlugins(lastOkIdx, idx, args.IfName, nc.Delegates)
-		saveDelegates(args.ContainerID, nc.CNIDir, false, currentDelegates)
-		return lastErr
-	}
 	kc.LogInfo("cmdAdd: delegated the creation of networks %+v\n", networks)
 
-	return nil
+	return result.Print()
 }
 
 func cmdDel(args *skel.CmdArgs) error {
