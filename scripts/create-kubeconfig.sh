@@ -1,6 +1,8 @@
-#!/bin/sh
+#!/bin/bash
 
 set -eo pipefail
+
+cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 
 config_dir=${1:-/tmp/kubeconfig}
 kubecfg_file=${2:-kactus-kubeconfig.yaml}
@@ -13,7 +15,7 @@ fi
 kubecfg_path=${config_dir}/${kubecfg_file}
 
 # create the service account and RBAC permissions
-kubectl apply -f kactus-serviceaccount-and-rbac.yaml
+kubectl apply -f ../manifests/kactus-serviceaccount-and-rbac.yaml
 # get the secret name from the service account
 secret_name=$(kubectl get sa kactus -n $namespace -o jsonpath="{.secrets[*].name}")
 # extract the ca.crt from the secret
