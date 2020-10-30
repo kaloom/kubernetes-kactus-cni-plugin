@@ -224,7 +224,7 @@ func checkDelegate(netconf map[string]interface{}, masterpluginEnabled *bool) er
 }
 
 func delegateAdd(network kc.NetworkConfig, argif string, netconf map[string]interface{}, auxNetOnly bool) (error, types.Result) {
-	kc.LogDebug("delegateAdd: network '%v', argif '%s', netconf '%+v'\n", network, argif, netconf)
+	kc.LogDebug("delegateAdd: network '%+v', argif '%s', netconf '%+v'\n", network, argif, netconf)
 	netconfBytes, err := json.Marshal(netconf)
 	if err != nil {
 		return fmt.Errorf("Kactus: error serializing kactus delegate netconf: %v", err), nil
@@ -258,6 +258,13 @@ func delegateAdd(network kc.NetworkConfig, argif string, netconf map[string]inte
 	if err != nil {
 		kc.LogError("delegateAdd: invoke.DelegateAdd errored: %s: %v\n", delegatePluginType, err)
 		return fmt.Errorf("Kactus: error in invoke Delegate add - %q: %v", delegatePluginType, err), nil
+	}
+
+	// return result if the delegate is the master plugin or
+	// dynamically injected in a pod, for the latter the podagent
+	// would invoke kactus one network at a time
+	if !isMasterplugin(netconf) && !auxNetOnly {
+		return nil, nil
 	}
 
 	return nil, result
@@ -562,21 +569,34 @@ func cmdAdd(args *skel.CmdArgs) error {
 		}
 	}
 
-	var result types.Result
+	var result, r types.Result
 	idx := -1
 	for i, delegate := range nc.Delegates {
 		idx = i
 		if nc.CNIVersion != "" {
 			delegate["cniVersion"] = nc.CNIVersion
 		}
-		err, result = delegateAdd(networks[i], args.IfName, delegate, auxNetOnly)
+		err, r = delegateAdd(networks[i], args.IfName, delegate, auxNetOnly)
 		if err != nil {
 			kc.LogError("cmdAdd: %v\n", err)
 			break
 		}
+		// among the list picks the result related to eth0
+		// interface or to an auxiliary interface in case
+		// kactus was invoked by the podagent
+		if result == nil {
+			result = r
+		}
 	}
 
 	if err != nil {
+		clearPlugins(idx, args.IfName, nc.Delegates)
+		return err
+	}
+	// should not happens
+	if result == nil {
+		err = fmt.Errorf("Kactus: result is nil, this is not expected")
+		kc.LogError("cmdAdd: %v\n", err)
 		clearPlugins(idx, args.IfName, nc.Delegates)
 		return err
 	}
