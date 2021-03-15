@@ -17,11 +17,12 @@ limitations under the License.
 package workqueue
 
 import (
-	"sort"
+	"container/heap"
+	"sync"
 	"time"
 
+	"k8s.io/apimachinery/pkg/util/clock"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	"k8s.io/client-go/util/clock"
 )
 
 // DelayingInterface is an Interface that can Add an item at a later time. This makes it easier to
@@ -34,22 +35,24 @@ type DelayingInterface interface {
 
 // NewDelayingQueue constructs a new workqueue with delayed queuing ability
 func NewDelayingQueue() DelayingInterface {
-	return newDelayingQueue(clock.RealClock{}, "")
+	return NewDelayingQueueWithCustomClock(clock.RealClock{}, "")
 }
 
+// NewNamedDelayingQueue constructs a new named workqueue with delayed queuing ability
 func NewNamedDelayingQueue(name string) DelayingInterface {
-	return newDelayingQueue(clock.RealClock{}, name)
+	return NewDelayingQueueWithCustomClock(clock.RealClock{}, name)
 }
 
-func newDelayingQueue(clock clock.Clock, name string) DelayingInterface {
+// NewDelayingQueueWithCustomClock constructs a new named workqueue
+// with ability to inject real or fake clock for testing purposes
+func NewDelayingQueueWithCustomClock(clock clock.Clock, name string) DelayingInterface {
 	ret := &delayingType{
-		Interface:          NewNamed(name),
-		clock:              clock,
-		heartbeat:          clock.Tick(maxWait),
-		stopCh:             make(chan struct{}),
-		waitingTimeByEntry: map[t]time.Time{},
-		waitingForAddCh:    make(chan waitFor, 1000),
-		metrics:            newRetryMetrics(name),
+		Interface:       NewNamed(name),
+		clock:           clock,
+		heartbeat:       clock.NewTicker(maxWait),
+		stopCh:          make(chan struct{}),
+		waitingForAddCh: make(chan *waitFor, 1000),
+		metrics:         newRetryMetrics(name),
 	}
 
 	go ret.waitingLoop()
@@ -66,19 +69,14 @@ type delayingType struct {
 
 	// stopCh lets us signal a shutdown to the waiting loop
 	stopCh chan struct{}
+	// stopOnce guarantees we only signal shutdown a single time
+	stopOnce sync.Once
 
 	// heartbeat ensures we wait no more than maxWait before firing
-	//
-	// TODO: replace with Ticker (and add to clock) so this can be cleaned up.
-	// clock.Tick will leak.
-	heartbeat <-chan time.Time
+	heartbeat clock.Ticker
 
-	// waitingForAdd is an ordered slice of items to be added to the contained work queue
-	waitingForAdd []waitFor
-	// waitingTimeByEntry holds wait time by entry, so we can lookup pre-existing indexes
-	waitingTimeByEntry map[t]time.Time
 	// waitingForAddCh is a buffered channel that feeds waitingForAdd
-	waitingForAddCh chan waitFor
+	waitingForAddCh chan *waitFor
 
 	// metrics counts the number of retries
 	metrics retryMetrics
@@ -88,12 +86,65 @@ type delayingType struct {
 type waitFor struct {
 	data    t
 	readyAt time.Time
+	// index in the priority queue (heap)
+	index int
 }
 
-// ShutDown gives a way to shut off this queue
+// waitForPriorityQueue implements a priority queue for waitFor items.
+//
+// waitForPriorityQueue implements heap.Interface. The item occurring next in
+// time (i.e., the item with the smallest readyAt) is at the root (index 0).
+// Peek returns this minimum item at index 0. Pop returns the minimum item after
+// it has been removed from the queue and placed at index Len()-1 by
+// container/heap. Push adds an item at index Len(), and container/heap
+// percolates it into the correct location.
+type waitForPriorityQueue []*waitFor
+
+func (pq waitForPriorityQueue) Len() int {
+	return len(pq)
+}
+func (pq waitForPriorityQueue) Less(i, j int) bool {
+	return pq[i].readyAt.Before(pq[j].readyAt)
+}
+func (pq waitForPriorityQueue) Swap(i, j int) {
+	pq[i], pq[j] = pq[j], pq[i]
+	pq[i].index = i
+	pq[j].index = j
+}
+
+// Push adds an item to the queue. Push should not be called directly; instead,
+// use `heap.Push`.
+func (pq *waitForPriorityQueue) Push(x interface{}) {
+	n := len(*pq)
+	item := x.(*waitFor)
+	item.index = n
+	*pq = append(*pq, item)
+}
+
+// Pop removes an item from the queue. Pop should not be called directly;
+// instead, use `heap.Pop`.
+func (pq *waitForPriorityQueue) Pop() interface{} {
+	n := len(*pq)
+	item := (*pq)[n-1]
+	item.index = -1
+	*pq = (*pq)[0:(n - 1)]
+	return item
+}
+
+// Peek returns the item at the beginning of the queue, without removing the
+// item or otherwise mutating the queue. It is safe to call directly.
+func (pq waitForPriorityQueue) Peek() interface{} {
+	return pq[0]
+}
+
+// ShutDown stops the queue. After the queue drains, the returned shutdown bool
+// on Get() will be true. This method may be invoked more than once.
 func (q *delayingType) ShutDown() {
-	q.Interface.ShutDown()
-	close(q.stopCh)
+	q.stopOnce.Do(func() {
+		q.Interface.ShutDown()
+		close(q.stopCh)
+		q.heartbeat.Stop()
+	})
 }
 
 // AddAfter adds the given item to the work queue after the given delay
@@ -114,7 +165,7 @@ func (q *delayingType) AddAfter(item interface{}, duration time.Duration) {
 	select {
 	case <-q.stopCh:
 		// unblock if ShutDown() is called
-	case q.waitingForAddCh <- waitFor{data: item, readyAt: q.clock.Now().Add(duration)}:
+	case q.waitingForAddCh <- &waitFor{data: item, readyAt: q.clock.Now().Add(duration)}:
 	}
 }
 
@@ -130,39 +181,49 @@ func (q *delayingType) waitingLoop() {
 	// Make a placeholder channel to use when there are no items in our list
 	never := make(<-chan time.Time)
 
+	// Make a timer that expires when the item at the head of the waiting queue is ready
+	var nextReadyAtTimer clock.Timer
+
+	waitingForQueue := &waitForPriorityQueue{}
+	heap.Init(waitingForQueue)
+
+	waitingEntryByData := map[t]*waitFor{}
+
 	for {
 		if q.Interface.ShuttingDown() {
-			// discard waiting entries
-			q.waitingForAdd = nil
-			q.waitingTimeByEntry = nil
 			return
 		}
 
 		now := q.clock.Now()
 
 		// Add ready entries
-		readyEntries := 0
-		for _, entry := range q.waitingForAdd {
+		for waitingForQueue.Len() > 0 {
+			entry := waitingForQueue.Peek().(*waitFor)
 			if entry.readyAt.After(now) {
 				break
 			}
+
+			entry = heap.Pop(waitingForQueue).(*waitFor)
 			q.Add(entry.data)
-			delete(q.waitingTimeByEntry, entry.data)
-			readyEntries++
+			delete(waitingEntryByData, entry.data)
 		}
-		q.waitingForAdd = q.waitingForAdd[readyEntries:]
 
 		// Set up a wait for the first item's readyAt (if one exists)
 		nextReadyAt := never
-		if len(q.waitingForAdd) > 0 {
-			nextReadyAt = q.clock.After(q.waitingForAdd[0].readyAt.Sub(now))
+		if waitingForQueue.Len() > 0 {
+			if nextReadyAtTimer != nil {
+				nextReadyAtTimer.Stop()
+			}
+			entry := waitingForQueue.Peek().(*waitFor)
+			nextReadyAtTimer = q.clock.NewTimer(entry.readyAt.Sub(now))
+			nextReadyAt = nextReadyAtTimer.C()
 		}
 
 		select {
 		case <-q.stopCh:
 			return
 
-		case <-q.heartbeat:
+		case <-q.heartbeat.C():
 			// continue the loop, which will add ready items
 
 		case <-nextReadyAt:
@@ -170,7 +231,7 @@ func (q *delayingType) waitingLoop() {
 
 		case waitEntry := <-q.waitingForAddCh:
 			if waitEntry.readyAt.After(q.clock.Now()) {
-				q.waitingForAdd = insert(q.waitingForAdd, q.waitingTimeByEntry, waitEntry)
+				insert(waitingForQueue, waitingEntryByData, waitEntry)
 			} else {
 				q.Add(waitEntry.data)
 			}
@@ -180,7 +241,7 @@ func (q *delayingType) waitingLoop() {
 				select {
 				case waitEntry := <-q.waitingForAddCh:
 					if waitEntry.readyAt.After(q.clock.Now()) {
-						q.waitingForAdd = insert(q.waitingForAdd, q.waitingTimeByEntry, waitEntry)
+						insert(waitingForQueue, waitingEntryByData, waitEntry)
 					} else {
 						q.Add(waitEntry.data)
 					}
@@ -192,55 +253,19 @@ func (q *delayingType) waitingLoop() {
 	}
 }
 
-// inserts the given entry into the sorted entries list
-// same semantics as append()... the given slice may be modified,
-// and the returned value should be used
-//
-// TODO: This should probably be converted to use container/heap to improve
-// running time for a large number of items.
-func insert(entries []waitFor, knownEntries map[t]time.Time, entry waitFor) []waitFor {
-	// if the entry is already in our retry list and the existing time is before the new one, just skip it
-	existingTime, exists := knownEntries[entry.data]
-	if exists && existingTime.Before(entry.readyAt) {
-		return entries
-	}
-
-	// if the entry exists and is scheduled for later, go ahead and remove the entry
+// insert adds the entry to the priority queue, or updates the readyAt if it already exists in the queue
+func insert(q *waitForPriorityQueue, knownEntries map[t]*waitFor, entry *waitFor) {
+	// if the entry already exists, update the time only if it would cause the item to be queued sooner
+	existing, exists := knownEntries[entry.data]
 	if exists {
-		if existingIndex := findEntryIndex(entries, existingTime, entry.data); existingIndex >= 0 && existingIndex < len(entries) {
-			entries = append(entries[:existingIndex], entries[existingIndex+1:]...)
+		if existing.readyAt.After(entry.readyAt) {
+			existing.readyAt = entry.readyAt
+			heap.Fix(q, existing.index)
 		}
+
+		return
 	}
 
-	insertionIndex := sort.Search(len(entries), func(i int) bool {
-		return entry.readyAt.Before(entries[i].readyAt)
-	})
-
-	// grow by 1
-	entries = append(entries, waitFor{})
-	// shift items from the insertion point to the end
-	copy(entries[insertionIndex+1:], entries[insertionIndex:])
-	// insert the record
-	entries[insertionIndex] = entry
-
-	knownEntries[entry.data] = entry.readyAt
-
-	return entries
-}
-
-// findEntryIndex returns the index for an existing entry
-func findEntryIndex(entries []waitFor, existingTime time.Time, data t) int {
-	index := sort.Search(len(entries), func(i int) bool {
-		return entries[i].readyAt.After(existingTime) || existingTime == entries[i].readyAt
-	})
-
-	// we know this is the earliest possible index, but there could be multiple with the same time
-	// iterate from here to find the dupe
-	for ; index < len(entries); index++ {
-		if entries[index].data == data {
-			break
-		}
-	}
-
-	return index
+	heap.Push(q, entry)
+	knownEntries[entry.data] = entry
 }

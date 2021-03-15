@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2017-2019 Kaloom Inc.
+Copyright (c) 2017-2021 Kaloom Inc.
 Copyright (c) 2017 Intel Corporation
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,6 +34,7 @@ import (
 
 	kc "github.com/kaloom/kubernetes-common"
 
+	"golang.org/x/net/context"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -254,7 +255,7 @@ func delegateAdd(network kc.NetworkConfig, argif string, netconf map[string]inte
 
 	delegatePluginType := netconf["type"].(string)
 	kc.LogDebug("delegateAdd: will call invoke.DelegateAdd for plugin: %s, with: '%s'\n", delegatePluginType, netconfBytes)
-	result, err := invoke.DelegateAdd(delegatePluginType, netconfBytes)
+	result, err := invoke.DelegateAdd(context.Background(), delegatePluginType, netconfBytes, nil)
 	if err != nil {
 		kc.LogError("delegateAdd: invoke.DelegateAdd errored: %s: %v\n", delegatePluginType, err)
 		return fmt.Errorf("Kactus: error in invoke Delegate add - %q: %v", delegatePluginType, err), nil
@@ -284,7 +285,7 @@ func delegateDel(argIfName string, netconf map[string]interface{}) error {
 
 	kc.LogDebug("delegateDel: will invoke.DelegateDel with a CNI_IFNAME set to: %s\n", ifName)
 	delegatePluginType := netconf["type"].(string)
-	err = invoke.DelegateDel(delegatePluginType, netconfBytes)
+	err = invoke.DelegateDel(context.Background(), delegatePluginType, netconfBytes, nil)
 	if err != nil {
 		return fmt.Errorf("Kactus: error in invoke Delegate del - %q: %v", delegatePluginType, err)
 	}
@@ -327,7 +328,7 @@ func createK8sClient(kubeconfig string) (*kubernetes.Clientset, error) {
 }
 
 func getPodNetworkAnnotation(client *kubernetes.Clientset, nameSpace, podName string) (string, error) {
-	pod, err := client.Pods(nameSpace).Get(podName, metav1.GetOptions{})
+	pod, err := client.CoreV1().Pods(nameSpace).Get(context.TODO(), podName, metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("Kactus: failed to fetch pod %s info off k8s apiserver: %v", podName, err)
 	}
@@ -364,7 +365,7 @@ func getDelegateNetConf(client *kubernetes.Clientset, networkName string, primar
 	}
 
 	crd := fmt.Sprintf("/apis/%s/v1/namespaces/default/networks/%s", crdGroupName, networkName)
-	netObjectData, err := client.ExtensionsV1beta1().RESTClient().Get().AbsPath(crd).DoRaw()
+	netObjectData, err := client.ExtensionsV1beta1().RESTClient().Get().AbsPath(crd).DoRaw(context.TODO())
 	if err != nil {
 		return "", fmt.Errorf("failed to get CRD, refer Kactus README.md for the usage guide: %v", err)
 	}
@@ -689,6 +690,11 @@ func cmdDel(args *skel.CmdArgs) error {
 	return result
 }
 
+func cmdCheck(args *skel.CmdArgs) error {
+	// TODO: implement
+	return fmt.Errorf("not implemented")
+}
+
 func main() {
 	logParams := kc.LoggingParams{
 		Prefix: "KACTUS ",
@@ -698,5 +704,6 @@ func main() {
 	lf := kc.OpenLogFile(&logParams)
 	defer kc.CloseLogFile(lf)
 
-	skel.PluginMain(cmdAdd, cmdDel, version.All)
+	skel.PluginMain(cmdAdd, cmdCheck, cmdDel, version.All,
+		"meta-plugin that delegates to other CNI plugins")
 }

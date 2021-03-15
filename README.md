@@ -64,28 +64,11 @@ kactus cni-plugin configuration follows the cni [specification](https://github.c
 
 ## For developpers:
 
-if you're adding a new dependency package to the project you need to use `gradle`, otherwise running the `./build.sh` script should do
-
-`gradle` required `java` to be installed, its used to generate the dependencies (using `gogradle` plugin), update the `gogradle.lock`, build the project and update the go `vendor` directory if needed
-
-* update build.gradle
-* generate a new `gogradle.lock` file:
-  > `./gradlew lock`
-* build the project (the `build` gradle task would trigger an update to the `vendor` directory using the `gogradle.lock` if needed):
-  > `./gradlew build`
-
-  or simply
-
-  > `./gradlew`
+The repo uses `go mod` to manage go packages dependencies, if you're importing a new go package you need to:
+* > `go mod tidy`
+* > `./build.sh`
+* > `go mod vendor`
 * submit a merge request
-
-
-### other useful info:
-
-* updating only the vendor directory can be done with:
-  > `./gradlew vendor`
-* to get a list of available `gradle` tasks:
-  > `./gradlew tasks`
 
 # Setup
 
