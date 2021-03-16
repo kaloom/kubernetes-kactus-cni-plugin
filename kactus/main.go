@@ -35,6 +35,7 @@ import (
 	kc "github.com/kaloom/kubernetes-common"
 
 	"golang.org/x/net/context"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -47,8 +48,9 @@ import (
 )
 
 const (
-	defaultCNIDir = "/var/lib/cni/kactus"
-	crdGroupName  = "kaloom.com" // use our namespace to avoid colliding with somebody's else CRD that uses the same networks api extensions
+	defaultCNIDir     = "/var/lib/cni/kactus"
+	crdGroupName      = "kaloom.com" // use our namespace to avoid colliding with somebody's else CRD that uses the same networks api extensions
+	resourceNameAnnot = "k8s.v1.cni.cncf.io/resourceName"
 )
 
 var (
@@ -327,17 +329,17 @@ func createK8sClient(kubeconfig string) (*kubernetes.Clientset, error) {
 	return kubernetes.NewForConfig(cfg)
 }
 
-func getPodNetworkAnnotation(client *kubernetes.Clientset, nameSpace, podName string) (string, error) {
+func getPodNetworkAnnotation(client *kubernetes.Clientset, nameSpace, podName string) (string, *v1.Pod, error) {
 	pod, err := client.CoreV1().Pods(nameSpace).Get(context.TODO(), podName, metav1.GetOptions{})
 	if err != nil {
-		return "", fmt.Errorf("Kactus: failed to fetch pod %s info off k8s apiserver: %v", podName, err)
+		return "", nil, fmt.Errorf("Kactus: failed to fetch pod %s info off k8s apiserver: %v", podName, err)
 	}
 
-	return pod.Annotations["networks"], nil
+	return pod.Annotations["networks"], pod, nil
 }
 
 // from the CRD networks's config, create a netconf for the delegate cni-plugin
-func getPluginNetConf(plugin, config, networkName string, primary bool) (string, error) {
+func getPluginNetConf(plugin, config, networkName, deviceID, resourceName string, primary bool) (string, error) {
 	var netconf bytes.Buffer
 
 	if plugin == "" || config == "" {
@@ -345,6 +347,9 @@ func getPluginNetConf(plugin, config, networkName string, primary bool) (string,
 	}
 
 	tmpconfig := []string{`{"type": "`, plugin, `","networkName": "`, networkName}
+	if deviceID != "" {
+		tmpconfig = append(tmpconfig, []string{`","deviceID": "`, deviceID, `","resourceName": "`, resourceName}...)
+	}
 	if primary {
 		tmpconfig = append(tmpconfig, []string{`","masterPlugin": true,`, config[strings.Index(config, "\""):len(config)]}...)
 	} else {
@@ -359,32 +364,39 @@ func getPluginNetConf(plugin, config, networkName string, primary bool) (string,
 }
 
 // call the CRD API extension for the crdGroupName and fetch the network configuration
-func getDelegateNetConf(client *kubernetes.Clientset, networkName string, primary bool) (string, error) {
+func getDelegateNetConf(client *kubernetes.Clientset, networkName string, pod *v1.Pod,
+	resourceMap map[string]*ResourceInfo, primary bool) (string, map[string]*ResourceInfo, error) {
 	if networkName == "" {
-		return "", fmt.Errorf("network name can't be empty")
+		return "", nil, fmt.Errorf("network name can't be empty")
 	}
 
 	crd := fmt.Sprintf("/apis/%s/v1/namespaces/default/networks/%s", crdGroupName, networkName)
 	netObjectData, err := client.ExtensionsV1beta1().RESTClient().Get().AbsPath(crd).DoRaw(context.TODO())
 	if err != nil {
-		return "", fmt.Errorf("failed to get CRD, refer Kactus README.md for the usage guide: %v", err)
+		return "", nil, fmt.Errorf("failed to get CRD, refer Kactus README.md for the usage guide: %v", err)
 	}
 
 	no := netObject{}
 	if err := json.Unmarshal(netObjectData, &no); err != nil {
-		return "", fmt.Errorf("failed to unmarshal the netObject data for network %s: %v", networkName, err)
+		return "", nil, fmt.Errorf("failed to unmarshal the netObject data for network %s: %v", networkName, err)
 	}
 
-	nc, err := getPluginNetConf(no.Spec.Plugin, no.Spec.Config, networkName, primary)
+	updatedResourceMap, deviceID, resourceName, err := getResourceMap(pod, &no, resourceMap)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
-	return nc, nil
+	nc, err := getPluginNetConf(no.Spec.Plugin, no.Spec.Config, networkName, deviceID, resourceName, primary)
+	if err != nil {
+		return "", nil, err
+	}
+
+	return nc, updatedResourceMap, nil
 }
 
-func getNetworkConfig(client *kubernetes.Clientset, networks []kc.NetworkConfig, auxNetOnly bool) (string, error) {
+func getNetworkConfig(client *kubernetes.Clientset, networks []kc.NetworkConfig, pod *v1.Pod, auxNetOnly bool) (string, error) {
 	var netConf bytes.Buffer
+	var resourceMap map[string]*ResourceInfo
 
 	netConf.WriteString("[")
 	for i, podNet := range networks {
@@ -397,10 +409,11 @@ func getNetworkConfig(client *kubernetes.Clientset, networks []kc.NetworkConfig,
 			primary = true
 		}
 
-		nc, err := getDelegateNetConf(client, podNet.NetworkName, primary)
+		nc, updatedResourceMap, err := getDelegateNetConf(client, podNet.NetworkName, pod, resourceMap, primary)
 		if err != nil {
 			return "", fmt.Errorf("Kactus: failed getting the netplugin: %v", err)
 		}
+		resourceMap = updatedResourceMap
 		netConf.WriteString(nc)
 	}
 	netConf.WriteString("]")
@@ -428,11 +441,11 @@ func parseDelegatesNetConf(nc string) ([]map[string]interface{}, error) {
 	return delegateNetconf.Delegates, nil
 }
 
-func getPodNetworks(args *skel.CmdArgs, k8sclient *kubernetes.Clientset) ([]kc.NetworkConfig, bool, error) {
+func getPodNetworks(args *skel.CmdArgs, k8sclient *kubernetes.Clientset) ([]kc.NetworkConfig, bool, *v1.Pod, error) {
 	cniArgs := CNIArgs{}
 	err := types.LoadArgs(args.Args, &cniArgs)
 	if err != nil {
-		return nil, false, err
+		return nil, false, nil, err
 	}
 
 	kc.LogDebug("getPodNetworks: cniArgs = '%+v'", cniArgs)
@@ -446,32 +459,33 @@ func getPodNetworks(args *skel.CmdArgs, k8sclient *kubernetes.Clientset) ([]kc.N
 			podNet.IfMAC = mac
 		}
 		networks = append(networks, podNet)
-		return networks, true, nil
+		return networks, true, nil, nil
 	}
 
-	netAnnot, err := getPodNetworkAnnotation(k8sclient, string(cniArgs.K8S_POD_NAMESPACE), string(cniArgs.K8S_POD_NAME))
+	netAnnot, pod, err := getPodNetworkAnnotation(k8sclient, string(cniArgs.K8S_POD_NAMESPACE), string(cniArgs.K8S_POD_NAME))
 	if err != nil {
-		return nil, false, err
+		return nil, false, nil, err
 	}
 
 	if netAnnot == "" {
 		networks = append(networks, kc.NetworkConfig{IsPrimary: true}) // fill this slot with an empty network
 		kc.LogDebug("getPodNetworks: len(netAnnot) = 0, nonet\n")
-		return networks, false, nil
+		return networks, false, pod, nil
 	}
 
 	podNetworks := []kc.NetworkConfig{}
 	if err := json.Unmarshal([]byte(netAnnot), &podNetworks); err != nil {
 		err = fmt.Errorf("Kactus: failed to unmarshal pod network annotations '%q', err: %v", netAnnot, err)
-		return nil, false, err
+		return nil, false, nil, err
 	}
 
-	return append(networks, podNetworks...), false, nil
+	return append(networks, podNetworks...), false, pod, nil
 }
 
-func getDelegatesNetConf(networks []kc.NetworkConfig, auxNetOnly bool, k8sclient *kubernetes.Clientset) ([]map[string]interface{}, error) {
+func getDelegatesNetConf(networks []kc.NetworkConfig, pod *v1.Pod, auxNetOnly bool,
+	k8sclient *kubernetes.Clientset) ([]map[string]interface{}, error) {
 	kc.LogDebug("getDelegatesNetConf: networks: %v\n", networks)
-	networkConf, err := getNetworkConfig(k8sclient, networks, auxNetOnly)
+	networkConf, err := getNetworkConfig(k8sclient, networks, pod, auxNetOnly)
 	if err != nil {
 		return nil, err
 	}
@@ -516,6 +530,39 @@ func getIfName(argsIfName string, delegate map[string]interface{}) string {
 	return ifName
 }
 
+func getResourceMap(pod *v1.Pod, no *netObject, resourceMap map[string]*ResourceInfo) (map[string]*ResourceInfo, string, string, error) {
+	// Get resourceName annotation from the Network CR
+	deviceID := ""
+	resourceName, ok := no.GetAnnotations()[resourceNameAnnot]
+	if ok && pod.Name != "" && pod.Namespace != "" {
+		// ResourceName annotation is found; try to get device info from resourceMap
+		kc.LogDebug("getResourceMap: found resourceName annotation : %s\n", resourceName)
+
+		if resourceMap == nil {
+			ck, err := GetResourceClient()
+			if err != nil {
+				return nil, deviceID, resourceName, fmt.Errorf("getResourceMap: failed to get a ResourceClient instance: %v", err)
+			}
+			resourceMap, err = ck.GetPodResourceMap(pod)
+			if err != nil {
+				return resourceMap, deviceID, resourceName, fmt.Errorf("getResourceMap: failed to get resourceMap from ResourceClient: %v", err)
+			}
+			kc.LogDebug("getResourceMap: resourceMap instance: %+v\n", resourceMap)
+		}
+
+		entry, ok := resourceMap[resourceName]
+		if ok {
+			if idCount := len(entry.DeviceIDs); idCount > 0 && idCount > entry.Index {
+				deviceID = entry.DeviceIDs[entry.Index]
+				kc.LogDebug("getResourceMap: podName: %s deviceID: %s\n", pod.Name, deviceID)
+				entry.Index++ // increment Index for next delegate
+			}
+		}
+	}
+
+	return resourceMap, deviceID, resourceName, nil
+}
+
 func cmdAdd(args *skel.CmdArgs) error {
 	logBuildDetails()
 	kc.LogDebug("cmdAdd: args: %+v\n", string(args.StdinData[:]))
@@ -531,7 +578,7 @@ func cmdAdd(args *skel.CmdArgs) error {
 		kc.LogError("cmdAdd: Err failed to create a k8s client: %v", err)
 		return err
 	}
-	networks, auxNetOnly, err := getPodNetworks(args, k8sclient)
+	networks, auxNetOnly, pod, err := getPodNetworks(args, k8sclient)
 	if err != nil {
 		err = fmt.Errorf("Kactus: Err in getting k8s network from pod: %v", err)
 		kc.LogError("cmdAdd: %v\n", err)
@@ -545,7 +592,7 @@ func cmdAdd(args *skel.CmdArgs) error {
 	}
 	kc.LogDebug("cmdAdd: len(networks) = %d, networks = '%+v'", len(networks), networks)
 	if len(networks) > 0 && networks[0].NetworkName != "" {
-		delegates, err := getDelegatesNetConf(networks, auxNetOnly, k8sclient)
+		delegates, err := getDelegatesNetConf(networks, pod, auxNetOnly, k8sclient)
 		if err != nil {
 			kc.LogError("cmdAdd: %v\n", err)
 			return err
@@ -631,7 +678,7 @@ func cmdDel(args *skel.CmdArgs) error {
 		kc.LogError("cmdDel: Err failed to create a k8s client: %v", err)
 		return err
 	}
-	networks, auxNetOnly, err := getPodNetworks(args, k8sclient)
+	networks, auxNetOnly, _, err := getPodNetworks(args, k8sclient)
 	if err != nil {
 		err = fmt.Errorf("Kactus: Err in getting k8s network from pod: %v", err)
 		kc.LogError("cmdDel: %v\n", err)
