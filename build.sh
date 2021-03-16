@@ -6,7 +6,7 @@ cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 
 REPO_PATH=github.com/kaloom/kubernetes-kactus-cni-plugin
 EXEC_NAME=kactus
-PROJECT_PATH=.gogradle/project_gopath
+PROJECT_PATH=.gopath
 
 # Add branch/commit/date into binary
 set +e
@@ -28,7 +28,7 @@ mkdir -p $PROJECT_PATH
 
 if [ ! -h ${PROJECT_PATH}/src/${REPO_PATH} ]; then
     mkdir -p ${PROJECT_PATH}/src/${org_path}
-    ln -s ../../../../.. ${PROJECT_PATH}/src/${REPO_PATH}
+    ln -s ../../../.. ${PROJECT_PATH}/src/${REPO_PATH}
 fi
 
 export GO15VENDOREXPERIMENT=1

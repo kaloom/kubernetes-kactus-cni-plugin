@@ -1,4 +1,3 @@
 *~
-.gogradle/
-.gradle/
+.gopath/
 bin/
