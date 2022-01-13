@@ -75,12 +75,12 @@ func getKubeletClient() (ResourceClient, error) {
 
 	client, conn, err := podresources.GetClient(kubeletSocket, 10*time.Second, defaultPodResourcesMaxSize)
 	if err != nil {
-		return nil, fmt.Errorf("getKubeletClient: error getting grpc client: %v\n", err)
+		return nil, fmt.Errorf("getKubeletClient: error getting grpc client: %v", err)
 	}
 	defer conn.Close()
 
 	if err := newClient.getPodResources(client); err != nil {
-		return nil, fmt.Errorf("getKubeletClient: error ge tting pod resources from client: %v\n", err)
+		return nil, fmt.Errorf("getKubeletClient: error ge tting pod resources from client: %v", err)
 	}
 
 	return newClient, nil
