@@ -34,7 +34,28 @@ fi
 export GO15VENDOREXPERIMENT=1
 export GOBIN=${PWD}/bin
 export GOPATH=${PWD}/${PROJECT_PATH}
-export GO111MODULE=off
+export GOFLAGS="-mod=vendor"
+#export GO111MODULE=off
+
+while getopts "tlV" opt; do
+    case $opt in
+        t)
+            shift
+            echo "Running go test on $EXEC_NAME/"
+            go test "$@" ${REPO_PATH}/${EXEC_NAME}/...
+            ;;
+        l)
+            shift
+            echo "Running go lint on $EXEC_NAME/"
+            golint ${REPO_PATH}/${EXEC_NAME}/...
+            ;;
+        V)
+            shift
+            echo "Running go vet on $EXEC_NAME/"
+            go vet "$@" ${REPO_PATH}/${EXEC_NAME}/...
+            ;;
+    esac
+done
 
 echo "Building $EXEC_NAME"
 go install -ldflags "${LDFLAGS}" "$@" ${REPO_PATH}/${EXEC_NAME}
