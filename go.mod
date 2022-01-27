@@ -3,46 +3,18 @@ module github.com/kaloom/kubernetes-kactus-cni-plugin
 go 1.12
 
 require (
-	github.com/Microsoft/go-winio v0.4.16
+	github.com/Microsoft/go-winio v0.4.16 // indirect
 	github.com/containernetworking/cni v0.8.1
-	github.com/containernetworking/plugins v0.9.1
-	github.com/davecgh/go-spew v1.1.1
-	github.com/evanphx/json-patch v4.2.0+incompatible
-	github.com/gogo/protobuf v1.3.1
-	github.com/golang/groupcache v0.0.0-20190702054246-869f871628b6
-	github.com/golang/protobuf v1.4.2
-	github.com/google/gofuzz v1.1.0
-	github.com/googleapis/gnostic v0.2.0
-	github.com/hpcloud/tail v1.0.0
-	github.com/imdario/mergo v0.3.5
-	github.com/json-iterator/go v1.1.9
-	github.com/k8snetworkplumbingwg/network-attachment-definition-client v1.1.0
-	github.com/kaloom/kubernetes-common v0.1.1
-	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd
-	github.com/modern-go/reflect2 v1.0.1
-	github.com/onsi/ginkgo v1.12.1
-	github.com/spf13/pflag v1.0.5
-	github.com/vishvananda/netlink v1.1.1-0.20201029203352-d40f9887b852
-	github.com/vishvananda/netns v0.0.0-20210104183010-2eb08e3e575f
-	golang.org/x/crypto v0.0.0-20200622213623-75b288015ac9
+	github.com/googleapis/gnostic v0.2.0 // indirect
+	github.com/json-iterator/go v1.1.9 // indirect
+	github.com/kaloom/kubernetes-common v0.1.4
+	github.com/onsi/gomega v1.10.3 // indirect
+	github.com/stretchr/objx v0.2.0 // indirect
 	golang.org/x/net v0.0.0-20201006153459-a7d1128ccaa0
-	golang.org/x/oauth2 v0.0.0-20190604053449-0f29369cfe45
-	golang.org/x/sys v0.0.0-20201117170446-d9b008d0a637
-	golang.org/x/text v0.3.3
-	golang.org/x/time v0.0.0-20190308202827-9d24e82272b4
-	google.golang.org/appengine v1.5.0
-	google.golang.org/grpc v1.19.0
-	gopkg.in/fsnotify.v1 v1.4.7
-	gopkg.in/inf.v0 v0.9.1
-	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7
-	gopkg.in/yaml.v2 v2.3.0
+	golang.org/x/sys v0.0.0-20201117170446-d9b008d0a637 // indirect
+	gopkg.in/check.v1 v1.0.0-20190902080502-41f04d3bba15 // indirect
 	k8s.io/api v0.18.3
 	k8s.io/apimachinery v0.18.3
 	k8s.io/client-go v0.18.3
-	k8s.io/klog v1.0.0
-	k8s.io/kube-openapi v0.0.0-20200410145947-61e04a5be9a6
 	k8s.io/kubernetes v1.13.0
-	k8s.io/utils v0.0.0-20200324210504-a9aa75ae1b89
-	sigs.k8s.io/structured-merge-diff/v3 v3.0.0
-	sigs.k8s.io/yaml v1.2.0
 )
