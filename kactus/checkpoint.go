@@ -73,15 +73,14 @@ func getCheckpoint(filePath string) (ResourceClient, error) {
 
 // getPodEntries gets all Pod device allocation entries from checkpoint file
 func (cp *checkpoint) getPodEntries() error {
-
 	cpd := &checkpointFileData{}
 	rawBytes, err := ioutil.ReadFile(cp.fileName)
 	if err != nil {
-		return fmt.Errorf("getPodEntries: error reading file %s\n%v\n", checkPointfile, err)
+		return fmt.Errorf("getPodEntries: error reading file %s: %v", checkPointfile, err)
 	}
 
 	if err = json.Unmarshal(rawBytes, cpd); err != nil {
-		return fmt.Errorf("getPodEntries: error unmarshalling raw bytes %v", err)
+		return fmt.Errorf("getPodEntries: error unmarshalling raw bytes: %v", err)
 	}
 
 	cp.podEntires = cpd.Data.PodDeviceEntries

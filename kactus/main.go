@@ -66,6 +66,13 @@ type netConf struct {
 	Kubeconfig string                   `json:"kubeconfig"`
 }
 
+type cniContext struct {
+	pod        *v1.Pod
+	cniArgs    *CNIArgs
+	auxNetOnly bool
+	k8sclient  *kubernetes.Clientset
+}
+
 // struct of k8s CRD network object
 type netObject struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -226,7 +233,12 @@ func checkDelegate(netconf map[string]interface{}, masterpluginEnabled *bool) er
 	return nil
 }
 
-func delegateAdd(network kc.NetworkConfig, argif string, netconf map[string]interface{}, auxNetOnly bool) (error, types.Result) {
+// needed for IPAMs and wherabouts in particular see https://github.com/k8snetworkplumbingwg/whereabouts/blob/ebcf63f836d65f6d50e6ee2569997c5d5f081679/pkg/types/types.go#L63
+func getCNIArgsForDelegate(cniArgs *CNIArgs) string {
+	return fmt.Sprintf("IgnoreUnknown=1;K8S_POD_NAME=%s;K8S_POD_NAMESPACE=%s;K8S_POD_INFRA_CONTAINER_ID=%s", cniArgs.K8S_POD_NAME, cniArgs.K8S_POD_NAMESPACE, cniArgs.K8S_POD_INFRA_CONTAINER_ID)
+}
+
+func (cc *cniContext) delegateAdd(network kc.NetworkConfig, argif string, netconf map[string]interface{}) (error, types.Result) {
 	kc.LogDebug("delegateAdd: network '%+v', argif '%s', netconf '%+v'\n", network, argif, netconf)
 	netconfBytes, err := json.Marshal(netconf)
 	if err != nil {
@@ -239,22 +251,25 @@ func delegateAdd(network kc.NetworkConfig, argif string, netconf map[string]inte
 		if os.Setenv("CNI_IFNAME", podif) != nil {
 			return fmt.Errorf("Kactus: error in setting CNI_IFNAME"), nil
 		}
+		cniArgs := getCNIArgsForDelegate(cc.cniArgs)
 		if network.IfMAC != "" {
-			cniArgs := fmt.Sprintf("IgnoreUnknown=1;CNI_IFMAC=%s", network.IfMAC)
+			cniArgs = fmt.Sprintf("%s;CNI_IFMAC=%s;MAC=%s", cniArgs, network.IfMAC, network.IfMAC)
 			if os.Setenv("CNI_ARGS", cniArgs); err != nil {
 				return fmt.Errorf("Kactus: error in setting CNI_ARGS to %s", cniArgs), nil
 			}
 			kc.LogDebug("delegateAdd: will invoke.DelegateAdd with a CNI_IFNAME set to: %s and CNI_ARGS set to: '%s' (not a master plugin)\n", podif, cniArgs)
 		} else {
-			kc.LogDebug("delegateAdd: will invoke.DelegateAdd with a CNI_IFNAME set to: %s (not a master plugin)\n", podif)
+			kc.LogDebug("delegateAdd: will invoke.DelegateAdd with a CNI_IFNAME set to: %s and CNI_ARGS set to: '%s' (not a master plugin)\n", podif, cniArgs)
+		}
+		if os.Setenv("CNI_ARGS", cniArgs); err != nil {
+			return fmt.Errorf("Kactus: error in setting CNI_ARGS to %s", cniArgs), nil
 		}
 	} else {
 		if os.Setenv("CNI_IFNAME", argif) != nil {
 			return fmt.Errorf("Kactus: error in setting CNI_IFNAME"), nil
 		}
-		kc.LogDebug("delegateAdd: will invoke.DelegateAdd with a CNI_IFNAME set to: %s (for master plugin)\n", argif)
+		kc.LogDebug("delegateAdd: will invoke.DelegateAdd with a CNI_IFNAME set to: %s' (not a master plugin)\n", argif)
 	}
-
 	delegatePluginType := netconf["type"].(string)
 	kc.LogDebug("delegateAdd: will call invoke.DelegateAdd for plugin: %s, with: '%s'\n", delegatePluginType, netconfBytes)
 	result, err := invoke.DelegateAdd(context.Background(), delegatePluginType, netconfBytes, nil)
@@ -266,14 +281,14 @@ func delegateAdd(network kc.NetworkConfig, argif string, netconf map[string]inte
 	// return result if the delegate is the master plugin or
 	// dynamically injected in a pod, for the latter the podagent
 	// would invoke kactus one network at a time
-	if !isMasterplugin(netconf) && !auxNetOnly {
+	if !isMasterplugin(netconf) && !cc.auxNetOnly {
 		return nil, nil
 	}
 
 	return nil, result
 }
 
-func delegateDel(argIfName string, netconf map[string]interface{}) error {
+func (cc *cniContext) delegateDel(argIfName string, netconf map[string]interface{}) error {
 	kc.LogDebug("delegateDel: argIfname %s, netconf = '%v'\n", argIfName, netconf)
 	ifName := getIfName(argIfName, netconf)
 	netconfBytes, err := json.Marshal(netconf)
@@ -284,7 +299,10 @@ func delegateDel(argIfName string, netconf map[string]interface{}) error {
 	if os.Setenv("CNI_IFNAME", ifName) != nil {
 		return fmt.Errorf("Kactus: error in setting CNI_IFNAME to %s", ifName)
 	}
-
+	cniArgs := getCNIArgsForDelegate(cc.cniArgs)
+	if os.Setenv("CNI_ARGS", cniArgs); err != nil {
+		return fmt.Errorf("Kactus: error in setting CNI_ARGS to %s", cniArgs)
+	}
 	kc.LogDebug("delegateDel: will invoke.DelegateDel with a CNI_IFNAME set to: %s\n", ifName)
 	delegatePluginType := netconf["type"].(string)
 	err = invoke.DelegateDel(context.Background(), delegatePluginType, netconfBytes, nil)
@@ -295,7 +313,7 @@ func delegateDel(argIfName string, netconf map[string]interface{}) error {
 	return err
 }
 
-func clearPlugins(idx int, argIfName string, delegates []map[string]interface{}) {
+func (cc *cniContext) clearPlugins(idx int, argIfName string, delegates []map[string]interface{}) {
 	if os.Setenv("CNI_COMMAND", "DEL") != nil {
 		kc.LogError("failed to set CNI_COMMAND to DEL")
 		return
@@ -303,7 +321,7 @@ func clearPlugins(idx int, argIfName string, delegates []map[string]interface{})
 
 	kc.LogDebug("clearPlugins: idx=%d, argIfName=%s\n", idx, argIfName)
 	for i := 0; i <= idx; i++ {
-		delegateDel(argIfName, delegates[i])
+		cc.delegateDel(argIfName, delegates[i])
 	}
 }
 
@@ -364,14 +382,13 @@ func getPluginNetConf(plugin, config, networkName, deviceID, resourceName string
 }
 
 // call the CRD API extension for the crdGroupName and fetch the network configuration
-func getDelegateNetConf(client *kubernetes.Clientset, networkName string, pod *v1.Pod,
-	resourceMap map[string]*ResourceInfo, primary bool) (string, map[string]*ResourceInfo, error) {
+func (cc *cniContext) getDelegateNetConf(networkName string, resourceMap map[string]*ResourceInfo, primary bool) (string, map[string]*ResourceInfo, error) {
 	if networkName == "" {
 		return "", nil, fmt.Errorf("network name can't be empty")
 	}
 
 	crd := fmt.Sprintf("/apis/%s/v1/namespaces/default/networks/%s", crdGroupName, networkName)
-	netObjectData, err := client.ExtensionsV1beta1().RESTClient().Get().AbsPath(crd).DoRaw(context.TODO())
+	netObjectData, err := cc.k8sclient.ExtensionsV1beta1().RESTClient().Get().AbsPath(crd).DoRaw(context.TODO())
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to get CRD, refer Kactus README.md for the usage guide: %v", err)
 	}
@@ -381,7 +398,7 @@ func getDelegateNetConf(client *kubernetes.Clientset, networkName string, pod *v
 		return "", nil, fmt.Errorf("failed to unmarshal the netObject data for network %s: %v", networkName, err)
 	}
 
-	updatedResourceMap, deviceID, resourceName, err := getResourceMap(pod, &no, resourceMap)
+	updatedResourceMap, deviceID, resourceName, err := cc.getResourceMap(&no, resourceMap)
 	if err != nil {
 		return "", nil, err
 	}
@@ -394,7 +411,7 @@ func getDelegateNetConf(client *kubernetes.Clientset, networkName string, pod *v
 	return nc, updatedResourceMap, nil
 }
 
-func getNetworkConfig(client *kubernetes.Clientset, networks []kc.NetworkConfig, pod *v1.Pod, auxNetOnly bool) (string, error) {
+func (cc *cniContext) getNetworkConfig(networks []kc.NetworkConfig) (string, error) {
 	var netConf bytes.Buffer
 	var resourceMap map[string]*ResourceInfo
 
@@ -405,11 +422,11 @@ func getNetworkConfig(client *kubernetes.Clientset, networks []kc.NetworkConfig,
 		}
 
 		primary := false
-		if !auxNetOnly && podNet.IsPrimary {
+		if !cc.auxNetOnly && podNet.IsPrimary {
 			primary = true
 		}
 
-		nc, updatedResourceMap, err := getDelegateNetConf(client, podNet.NetworkName, pod, resourceMap, primary)
+		nc, updatedResourceMap, err := cc.getDelegateNetConf(podNet.NetworkName, resourceMap, primary)
 		if err != nil {
 			return "", fmt.Errorf("Kactus: failed getting the netplugin: %v", err)
 		}
@@ -441,13 +458,7 @@ func parseDelegatesNetConf(nc string) ([]map[string]interface{}, error) {
 	return delegateNetconf.Delegates, nil
 }
 
-func getPodNetworks(args *skel.CmdArgs, k8sclient *kubernetes.Clientset) ([]kc.NetworkConfig, bool, *v1.Pod, error) {
-	cniArgs := CNIArgs{}
-	err := types.LoadArgs(args.Args, &cniArgs)
-	if err != nil {
-		return nil, false, nil, err
-	}
-
+func getPodNetworks(cniArgs *CNIArgs, k8sclient *kubernetes.Clientset) ([]kc.NetworkConfig, bool, *v1.Pod, error) {
 	kc.LogDebug("getPodNetworks: cniArgs = '%+v'", cniArgs)
 	networks := []kc.NetworkConfig{}
 	if string(cniArgs.K8S_POD_NETWORK) != "" {
@@ -482,10 +493,9 @@ func getPodNetworks(args *skel.CmdArgs, k8sclient *kubernetes.Clientset) ([]kc.N
 	return append(networks, podNetworks...), false, pod, nil
 }
 
-func getDelegatesNetConf(networks []kc.NetworkConfig, pod *v1.Pod, auxNetOnly bool,
-	k8sclient *kubernetes.Clientset) ([]map[string]interface{}, error) {
+func (cc *cniContext) getDelegatesNetConf(networks []kc.NetworkConfig) ([]map[string]interface{}, error) {
 	kc.LogDebug("getDelegatesNetConf: networks: %v\n", networks)
-	networkConf, err := getNetworkConfig(k8sclient, networks, pod, auxNetOnly)
+	networkConf, err := cc.getNetworkConfig(networks)
 	if err != nil {
 		return nil, err
 	}
@@ -530,11 +540,11 @@ func getIfName(argsIfName string, delegate map[string]interface{}) string {
 	return ifName
 }
 
-func getResourceMap(pod *v1.Pod, no *netObject, resourceMap map[string]*ResourceInfo) (map[string]*ResourceInfo, string, string, error) {
+func (cc *cniContext) getResourceMap(no *netObject, resourceMap map[string]*ResourceInfo) (map[string]*ResourceInfo, string, string, error) {
 	// Get resourceName annotation from the Network CR
 	deviceID := ""
 	resourceName, ok := no.GetAnnotations()[resourceNameAnnot]
-	if ok && pod.Name != "" && pod.Namespace != "" {
+	if ok && cc.pod.Name != "" && cc.pod.Namespace != "" {
 		// ResourceName annotation is found; try to get device info from resourceMap
 		kc.LogDebug("getResourceMap: found resourceName annotation : %s\n", resourceName)
 
@@ -543,7 +553,7 @@ func getResourceMap(pod *v1.Pod, no *netObject, resourceMap map[string]*Resource
 			if err != nil {
 				return nil, deviceID, resourceName, fmt.Errorf("getResourceMap: failed to get a ResourceClient instance: %v", err)
 			}
-			resourceMap, err = ck.GetPodResourceMap(pod)
+			resourceMap, err = ck.GetPodResourceMap(cc.pod)
 			if err != nil {
 				return resourceMap, deviceID, resourceName, fmt.Errorf("getResourceMap: failed to get resourceMap from ResourceClient: %v", err)
 			}
@@ -554,7 +564,7 @@ func getResourceMap(pod *v1.Pod, no *netObject, resourceMap map[string]*Resource
 		if ok {
 			if idCount := len(entry.DeviceIDs); idCount > 0 && idCount > entry.Index {
 				deviceID = entry.DeviceIDs[entry.Index]
-				kc.LogDebug("getResourceMap: podName: %s deviceID: %s\n", pod.Name, deviceID)
+				kc.LogDebug("getResourceMap: podName: %s deviceID: %s\n", cc.pod.Name, deviceID)
 				entry.Index++ // increment Index for next delegate
 			}
 		}
@@ -565,6 +575,12 @@ func getResourceMap(pod *v1.Pod, no *netObject, resourceMap map[string]*Resource
 
 func cmdAdd(args *skel.CmdArgs) error {
 	logBuildDetails()
+	cniArgs := CNIArgs{}
+	err := types.LoadArgs(args.Args, &cniArgs)
+	if err != nil {
+		kc.LogError("cmdAdd: args: %v Err in loading args: %v\n", args.Args, err)
+		return err
+	}
 	kc.LogDebug("cmdAdd: args: %+v\n", string(args.StdinData[:]))
 	nc, err := loadNetConf(args.StdinData)
 	if err != nil {
@@ -578,7 +594,7 @@ func cmdAdd(args *skel.CmdArgs) error {
 		kc.LogError("cmdAdd: Err failed to create a k8s client: %v", err)
 		return err
 	}
-	networks, auxNetOnly, pod, err := getPodNetworks(args, k8sclient)
+	networks, auxNetOnly, pod, err := getPodNetworks(&cniArgs, k8sclient)
 	if err != nil {
 		err = fmt.Errorf("Kactus: Err in getting k8s network from pod: %v", err)
 		kc.LogError("cmdAdd: %v\n", err)
@@ -590,9 +606,15 @@ func cmdAdd(args *skel.CmdArgs) error {
 		kc.LogError("cmdAdd: %v\n", err)
 		return err
 	}
+	cc := cniContext{
+		pod:        pod,
+		cniArgs:    &cniArgs,
+		auxNetOnly: auxNetOnly,
+		k8sclient:  k8sclient,
+	}
 	kc.LogDebug("cmdAdd: len(networks) = %d, networks = '%+v'", len(networks), networks)
 	if len(networks) > 0 && networks[0].NetworkName != "" {
-		delegates, err := getDelegatesNetConf(networks, pod, auxNetOnly, k8sclient)
+		delegates, err := cc.getDelegatesNetConf(networks)
 		if err != nil {
 			kc.LogError("cmdAdd: %v\n", err)
 			return err
@@ -624,7 +646,7 @@ func cmdAdd(args *skel.CmdArgs) error {
 		if nc.CNIVersion != "" {
 			delegate["cniVersion"] = nc.CNIVersion
 		}
-		err, r = delegateAdd(networks[i], args.IfName, delegate, auxNetOnly)
+		err, r = cc.delegateAdd(networks[i], args.IfName, delegate)
 		if err != nil {
 			kc.LogError("cmdAdd: %v\n", err)
 			break
@@ -638,14 +660,14 @@ func cmdAdd(args *skel.CmdArgs) error {
 	}
 
 	if err != nil {
-		clearPlugins(idx, args.IfName, nc.Delegates)
+		cc.clearPlugins(idx, args.IfName, nc.Delegates)
 		return err
 	}
 	// should not happens
 	if result == nil {
 		err = fmt.Errorf("Kactus: result is nil, this is not expected")
 		kc.LogError("cmdAdd: %v\n", err)
-		clearPlugins(idx, args.IfName, nc.Delegates)
+		cc.clearPlugins(idx, args.IfName, nc.Delegates)
 		return err
 	}
 
@@ -665,6 +687,12 @@ func cmdDel(args *skel.CmdArgs) error {
 	var result error
 
 	logBuildDetails()
+	cniArgs := CNIArgs{}
+	err := types.LoadArgs(args.Args, &cniArgs)
+	if err != nil {
+		kc.LogError("cmdDel: args: %v Err in loading args: %v\n", args.Args, err)
+		return err
+	}
 	kc.LogDebug("cmdDel: args: %+v\n", string(args.StdinData[:]))
 	nc, err := loadNetConf(args.StdinData)
 	if err != nil {
@@ -678,11 +706,22 @@ func cmdDel(args *skel.CmdArgs) error {
 		kc.LogError("cmdDel: Err failed to create a k8s client: %v", err)
 		return err
 	}
-	networks, auxNetOnly, _, err := getPodNetworks(args, k8sclient)
+	networks, auxNetOnly, pod, err := getPodNetworks(&cniArgs, k8sclient)
 	if err != nil {
+		podsNotFoundErr := fmt.Sprintf("pods \"%s\" not found", cniArgs.K8S_POD_NAME)
+		if strings.HasSuffix(err.Error(), podsNotFoundErr) {
+			kc.LogDebug("cmdDel: %v, assume the pod is gone\n", err)
+			return nil
+		}
 		err = fmt.Errorf("Kactus: Err in getting k8s network from pod: %v", err)
 		kc.LogError("cmdDel: %v\n", err)
 		return err
+	}
+	cc := cniContext{
+		pod:        pod,
+		cniArgs:    &cniArgs,
+		auxNetOnly: auxNetOnly,
+		k8sclient:  k8sclient,
 	}
 	kc.LogDebug("cmdDel: len(networks) = %d, networks = '%+v'", len(networks), networks)
 
@@ -725,7 +764,7 @@ func cmdDel(args *skel.CmdArgs) error {
 	nc.Delegates = delegateToDelete
 
 	for _, delegate := range nc.Delegates {
-		err := delegateDel(args.IfName, delegate)
+		err := cc.delegateDel(args.IfName, delegate)
 		if err != nil {
 			kc.LogError("cmdDel: %v\n", err)
 			return err
