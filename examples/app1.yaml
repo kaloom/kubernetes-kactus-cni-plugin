@@ -24,7 +24,7 @@ spec:
             topologyKey: "kubernetes.io/hostname"
       initContainers:
         - name: net-setup-net1
-          image: kaloom/alpine:3.9
+          image: kaloom/netconfig-utils:latest
           env:
             - name: NET_IFNAME
               value: "net9f27410725ab" # green net
@@ -44,8 +44,9 @@ spec:
             capabilities:
               add:
                 - NET_ADMIN
+                - NET_RAW
         - name: net-setup-net2
-          image: kaloom/alpine:3.9
+          image: kaloom/netconfig-utils:latest
           env:
             - name: NET_IFNAME
               value: "net48d6215903df" # blue net
@@ -65,9 +66,10 @@ spec:
             capabilities:
               add:
                 - NET_ADMIN
+                - NET_RAW
       containers:
       - name: alpine-container
-        image: kaloom/alpine:3.9
+        image: alpine:latest
         imagePullPolicy: IfNotPresent
         args:
         - top
