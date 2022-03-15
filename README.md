@@ -66,7 +66,7 @@ kactus cni-plugin configuration follows the cni [specification](https://github.c
 
 The repo uses `go mod` to manage go packages dependencies, if you're importing a new go package you need to:
 * > `go mod tidy`
-* > `./build.sh`
+* > `cd kactus && go build -mod=mod`
 * > `go mod vendor`
 * submit a merge request
 
