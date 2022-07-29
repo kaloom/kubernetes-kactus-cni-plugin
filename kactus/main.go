@@ -30,6 +30,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	kc "github.com/kaloom/kubernetes-common"
@@ -44,6 +45,7 @@ import (
 	"github.com/containernetworking/cni/pkg/invoke"
 	"github.com/containernetworking/cni/pkg/skel"
 	"github.com/containernetworking/cni/pkg/types"
+	"github.com/containernetworking/cni/pkg/types/020"
 	"github.com/containernetworking/cni/pkg/version"
 )
 
@@ -57,6 +59,8 @@ var (
 	branch = "unknown"
 	commit = "unknown"
 	date   = "unknown"
+
+	vethAlreadyExists = regexp.MustCompile(`container veth name provided \([^)]*\) already exists`)
 )
 
 type netConf struct {
@@ -238,6 +242,17 @@ func getCNIArgsForDelegate(cniArgs *CNIArgs) string {
 	return fmt.Sprintf("IgnoreUnknown=1;K8S_POD_NAME=%s;K8S_POD_NAMESPACE=%s;K8S_POD_INFRA_CONTAINER_ID=%s", cniArgs.K8S_POD_NAME, cniArgs.K8S_POD_NAMESPACE, cniArgs.K8S_POD_INFRA_CONTAINER_ID)
 }
 
+func shouldIgnoreError(pluginType string, err error) bool {
+	if pluginType != "bridge" {
+		return false
+	}
+
+	// The bridge plugin is not idempotent, so in case that podagent restarts
+	// and calls kactus again, we want to ignore if the plugin was already ran.
+	// This prevents kactus from sending a DEL, then ADD.
+	return vethAlreadyExists.MatchString(err.Error())
+}
+
 func (cc *cniContext) delegateAdd(network kc.NetworkConfig, argif string, netconf map[string]interface{}) (error, types.Result) {
 	kc.LogDebug("delegateAdd: network '%+v', argif '%s', netconf '%+v'\n", network, argif, netconf)
 	netconfBytes, err := json.Marshal(netconf)
@@ -274,8 +289,13 @@ func (cc *cniContext) delegateAdd(network kc.NetworkConfig, argif string, netcon
 	kc.LogDebug("delegateAdd: will call invoke.DelegateAdd for plugin: %s, with: '%s'\n", delegatePluginType, netconfBytes)
 	result, err := invoke.DelegateAdd(context.Background(), delegatePluginType, netconfBytes, nil)
 	if err != nil {
-		kc.LogError("delegateAdd: invoke.DelegateAdd errored: %s: %v\n", delegatePluginType, err)
-		return fmt.Errorf("Kactus: error in invoke Delegate add - %q: %v", delegatePluginType, err), nil
+		if !shouldIgnoreError(delegatePluginType, err) {
+			kc.LogError("delegateAdd: invoke.DelegateAdd errored: %s: %v\n", delegatePluginType, err)
+			return fmt.Errorf("Kactus: error in invoke Delegate add - %q: %v", delegatePluginType, err), nil
+		}
+
+		// podagent currently ignores the result so in this case it's fine
+		result = &types020.Result{}
 	}
 
 	// return result if the delegate is the master plugin or
