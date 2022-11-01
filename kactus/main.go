@@ -564,29 +564,31 @@ func (cc *cniContext) getResourceMap(no *netObject, resourceMap map[string]*Reso
 	// Get resourceName annotation from the Network CR
 	deviceID := ""
 	resourceName, ok := no.GetAnnotations()[resourceNameAnnot]
-	if ok && cc.pod.Name != "" && cc.pod.Namespace != "" {
-		// ResourceName annotation is found; try to get device info from resourceMap
-		kc.LogDebug("getResourceMap: found resourceName annotation : %s\n", resourceName)
+	if !ok || cc.pod == nil || cc.pod.Name == "" || cc.pod.Namespace == "" {
+		return resourceMap, deviceID, resourceName, nil
+	}
 
-		if resourceMap == nil {
-			ck, err := GetResourceClient()
-			if err != nil {
-				return nil, deviceID, resourceName, fmt.Errorf("getResourceMap: failed to get a ResourceClient instance: %v", err)
-			}
-			resourceMap, err = ck.GetPodResourceMap(cc.pod)
-			if err != nil {
-				return resourceMap, deviceID, resourceName, fmt.Errorf("getResourceMap: failed to get resourceMap from ResourceClient: %v", err)
-			}
-			kc.LogDebug("getResourceMap: resourceMap instance: %+v\n", resourceMap)
+	// ResourceName annotation is found; try to get device info from resourceMap
+	kc.LogDebug("getResourceMap: found resourceName annotation : %s\n", resourceName)
+
+	if resourceMap == nil {
+		ck, err := GetResourceClient()
+		if err != nil {
+			return nil, deviceID, resourceName, fmt.Errorf("getResourceMap: failed to get a ResourceClient instance: %v", err)
 		}
+		resourceMap, err = ck.GetPodResourceMap(cc.pod)
+		if err != nil {
+			return resourceMap, deviceID, resourceName, fmt.Errorf("getResourceMap: failed to get resourceMap from ResourceClient: %v", err)
+		}
+		kc.LogDebug("getResourceMap: resourceMap instance: %+v\n", resourceMap)
+	}
 
-		entry, ok := resourceMap[resourceName]
-		if ok {
-			if idCount := len(entry.DeviceIDs); idCount > 0 && idCount > entry.Index {
-				deviceID = entry.DeviceIDs[entry.Index]
-				kc.LogDebug("getResourceMap: podName: %s deviceID: %s\n", cc.pod.Name, deviceID)
-				entry.Index++ // increment Index for next delegate
-			}
+	entry, ok := resourceMap[resourceName]
+	if ok {
+		if idCount := len(entry.DeviceIDs); idCount > 0 && idCount > entry.Index {
+			deviceID = entry.DeviceIDs[entry.Index]
+			kc.LogDebug("getResourceMap: podName: %s deviceID: %s\n", cc.pod.Name, deviceID)
+			entry.Index++ // increment Index for next delegate
 		}
 	}
 
