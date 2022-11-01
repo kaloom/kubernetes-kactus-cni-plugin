@@ -31,6 +31,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"strings"
 
 	kc "github.com/kaloom/kubernetes-common"
@@ -811,6 +812,18 @@ func main() {
 	// set to a value >= 1, otherwise logging goes to /dev/null
 	lf := kc.OpenLogFile(&logParams)
 	defer kc.CloseLogFile(lf)
+
+	// Makes sure we recover upon panic to not lose any logs, etc
+	defer func() {
+		if r := recover(); r != nil {
+			msg := fmt.Sprintf("panic: %v\n%v", r, string(debug.Stack()))
+			e := types.NewError(types.ErrInternal, msg, "")
+			if err := e.Print(); err != nil {
+				kc.LogError("Error writing error JSON to stdout: %w", err)
+			}
+			os.Exit(1)
+		}
+	}()
 
 	skel.PluginMain(cmdAdd, cmdCheck, cmdDel, version.All,
 		"meta-plugin that delegates to other CNI plugins")
