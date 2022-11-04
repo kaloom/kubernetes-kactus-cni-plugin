@@ -31,6 +31,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"strings"
 
 	kc "github.com/kaloom/kubernetes-common"
@@ -564,29 +565,31 @@ func (cc *cniContext) getResourceMap(no *netObject, resourceMap map[string]*Reso
 	// Get resourceName annotation from the Network CR
 	deviceID := ""
 	resourceName, ok := no.GetAnnotations()[resourceNameAnnot]
-	if ok && cc.pod.Name != "" && cc.pod.Namespace != "" {
-		// ResourceName annotation is found; try to get device info from resourceMap
-		kc.LogDebug("getResourceMap: found resourceName annotation : %s\n", resourceName)
+	if !ok || cc.pod == nil || cc.pod.Name == "" || cc.pod.Namespace == "" {
+		return resourceMap, deviceID, resourceName, nil
+	}
 
-		if resourceMap == nil {
-			ck, err := GetResourceClient()
-			if err != nil {
-				return nil, deviceID, resourceName, fmt.Errorf("getResourceMap: failed to get a ResourceClient instance: %v", err)
-			}
-			resourceMap, err = ck.GetPodResourceMap(cc.pod)
-			if err != nil {
-				return resourceMap, deviceID, resourceName, fmt.Errorf("getResourceMap: failed to get resourceMap from ResourceClient: %v", err)
-			}
-			kc.LogDebug("getResourceMap: resourceMap instance: %+v\n", resourceMap)
+	// ResourceName annotation is found; try to get device info from resourceMap
+	kc.LogDebug("getResourceMap: found resourceName annotation : %s\n", resourceName)
+
+	if resourceMap == nil {
+		ck, err := GetResourceClient()
+		if err != nil {
+			return nil, deviceID, resourceName, fmt.Errorf("getResourceMap: failed to get a ResourceClient instance: %v", err)
 		}
+		resourceMap, err = ck.GetPodResourceMap(cc.pod)
+		if err != nil {
+			return resourceMap, deviceID, resourceName, fmt.Errorf("getResourceMap: failed to get resourceMap from ResourceClient: %v", err)
+		}
+		kc.LogDebug("getResourceMap: resourceMap instance: %+v\n", resourceMap)
+	}
 
-		entry, ok := resourceMap[resourceName]
-		if ok {
-			if idCount := len(entry.DeviceIDs); idCount > 0 && idCount > entry.Index {
-				deviceID = entry.DeviceIDs[entry.Index]
-				kc.LogDebug("getResourceMap: podName: %s deviceID: %s\n", cc.pod.Name, deviceID)
-				entry.Index++ // increment Index for next delegate
-			}
+	entry, ok := resourceMap[resourceName]
+	if ok {
+		if idCount := len(entry.DeviceIDs); idCount > 0 && idCount > entry.Index {
+			deviceID = entry.DeviceIDs[entry.Index]
+			kc.LogDebug("getResourceMap: podName: %s deviceID: %s\n", cc.pod.Name, deviceID)
+			entry.Index++ // increment Index for next delegate
 		}
 	}
 
@@ -809,6 +812,18 @@ func main() {
 	// set to a value >= 1, otherwise logging goes to /dev/null
 	lf := kc.OpenLogFile(&logParams)
 	defer kc.CloseLogFile(lf)
+
+	// Makes sure we recover upon panic to not lose any logs, etc
+	defer func() {
+		if r := recover(); r != nil {
+			msg := fmt.Sprintf("panic: %v\n%v", r, string(debug.Stack()))
+			e := types.NewError(types.ErrInternal, msg, "")
+			if err := e.Print(); err != nil {
+				kc.LogError("Error writing error JSON to stdout: %w", err)
+			}
+			os.Exit(1)
+		}
+	}()
 
 	skel.PluginMain(cmdAdd, cmdCheck, cmdDel, version.All,
 		"meta-plugin that delegates to other CNI plugins")
